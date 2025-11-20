@@ -1,14 +1,48 @@
 const express = require('express');
 const cors = require('cors');
+require('dotenv').config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const app = express();
+const admin = require('firebase-admin');
 const port = process.env.PORT || 5001;
+
+// firebase admin
+
+var serviceAccount = require('./dealsninja-firebase-adminsdk.json');
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 app.use(cors());
 app.use(express.json());
 
-const uri =
-  'mongodb+srv://DealNinja:gOgVzxvWC3jVsM9y@cluster0.0lr5e3w.mongodb.net/?appName=Cluster0';
+const logger = (req, res, next) => {
+  console.log('login info');
+  next();
+};
+
+const varifyFireBaseToken = async (req, res, next) => {
+  console.log('headers', req.headers.authorization);
+  if (!req.headers.authorization) {
+    // dont entry
+    return res.status(401).send({ message: 'unauthorized access' });
+  }
+  const token = req.headers.authorization.split(' ')[1];
+  if (!token) {
+    return res.status(401).send({ message: 'unauthorized access' });
+  }
+
+  try {
+    const userInfo = await admin.auth().verifyIdToken(token);
+    req.token_email = userInfo.email;
+    next();
+  } catch {
+    return res.status(401).send({ message: 'unauthorized access' });
+  }
+};
+
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.0lr5e3w.mongodb.net/?appName=Cluster0`;
 
 const client = new MongoClient(uri, {
   serverApi: {
@@ -49,6 +83,13 @@ async function run() {
       }
     });
 
+    // get all user
+    app.get('/users', async (req, res) => {
+      const result = await usersCollection.find().toArray();
+      res.send(result);
+    });
+
+    // products APIs
     // POST product API
     app.post('/products', async (req, res) => {
       const newProduct = req.body;
@@ -68,12 +109,33 @@ async function run() {
       const result = await productsCollection.find(query).toArray();
       res.send(result);
     });
+
+    // latest apis
+
+    app.get('/latest-products', async (req, res) => {
+      const result = await productsCollection
+        .find()
+        .sort({ created_at: -1 })
+        .limit(8)
+        .toArray();
+      res.send(result);
+    });
+
     // get one products API
     app.get('/products/:id', async (req, res) => {
       const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ error: 'Invalid product ID' });
+      }
+
+      const query = { _id: id };
+      console.log(id);
+      console.log(query);
+
       const result = await productsCollection.findOne(query);
-      res.send(result);
+      console.log('result for server', result);
+      res.json(result);
     });
 
     // update product data
@@ -81,7 +143,7 @@ async function run() {
     app.patch('/products/:id', async (req, res) => {
       const id = req.params.id;
       const updatedProduct = req.body;
-      const query = { _id: new ObjectId(id) };
+      const query = { _id: id };
       const update = {
         $set: updatedProduct,
       };
@@ -93,7 +155,7 @@ async function run() {
 
     app.delete('/products/:id', async (req, res) => {
       const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
+      const query = { _id: id };
       const result = await productsCollection.deleteOne(query);
       res.send(result);
     });
@@ -110,16 +172,35 @@ async function run() {
 
     // get all bids
 
-    app.get('/bids', async (req, res) => {
+    app.get('/bids', logger, varifyFireBaseToken, async (req, res) => {
       const email = req.query.email;
       const query = {};
       if (email) {
+        if (email !== req.token_email) {
+          return res.status(403).send({
+            message: 'Forbidden accessnpm ',
+          });
+        }
         query.buyer_email = email;
       }
 
       const cursor = bidsCollection.find(query);
       const result = await cursor.toArray();
       res.send(result);
+    });
+
+    //bids data using productId API
+    app.get('/Product/bids/:productId', async (req, res) => {
+      const productId = req.params.productId;
+      const query = {
+        product: productId,
+      };
+      const result = await bidsCollection
+        .find(query)
+        .sort({ bid: -1 })
+        .toArray();
+
+      res.status(200).send(result);
     });
     // get one bid
     app.get('/bids/:id', async (req, res) => {
@@ -148,3 +229,27 @@ run().catch(console.dir);
 app.listen(port, (req, res) => {
   console.log(`Server is Running on ${port}`);
 });
+
+//Assimnemt APIS
+
+// // update models data
+
+// app.patch('/update-model/:id:', async (req, res) => {
+//   const id = req.params.id;
+//   const updatedProduct = req.body;
+//   const query = { _id: id };
+//   const update = {
+//     $set: updatedProduct,
+//   };
+//   const result = await modelsCollection.updateOne(query, update);
+//   res.send(result);
+// });
+
+// // delete one model API
+
+// app.delete('/models/:id', async (req, res) => {
+//   const id = req.params.id;
+//   const query = { _id: id };
+//   const result = await modelsCollection.deleteOne(query);
+//   res.send(result);
+// });
